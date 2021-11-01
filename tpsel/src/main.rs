@@ -53,13 +53,12 @@ fn main() {
 
     //get the address of function name given in arg
     let address_name = "trois_n";
-    let address: i32 = get_addr(pid_trace, address_name)
-        .expect("Erreur lors de la récupéraion de l'addresse de la fonction du prog tracé")
-        as i32;
+    let address: u64 = get_addr(pid_trace, address_name)
+        .expect("Erreur lors de la récupéraion de l'addresse de la fonction du prog tracé");
 
     //print the address of function_name in hexa and decimal
     println!(
-        "addresse of fonction \"{}\" :\nhexa (filled) : \"{:0>16x}\"\ndecimal : \"{}\"\n",
+        "address of function \"{}\" :\nhexa (filled) : \"{:0>16x}\"\ndecimal : \"{}\"\n",
         address_name, address, address
     );
 
@@ -69,10 +68,6 @@ fn main() {
 
     inject_trap(pid_trace, address);
     wait();
-
-    //sleep to be sure that inject_trap has modified the other process, and that he
-    //can't run his function anymore.
-    sleep(Duration::new(5, 0));
 
     // detaching from process
     let detaching = ptrace::cont(Pid::from_raw(pid_trace), Signal::SIGCONT);
@@ -96,9 +91,8 @@ fn pgrep(name: &str) -> Option<isize> {
     }
 }
 
-//objdump -t /proc/250573/exe | grep trois_n_plus_un | cut -c1-16
-
-fn get_addr(pid: i32, addr_name: &str) -> Option<i64> {
+//objdump -t /proc/xxx/exe | grep trois_n | cut -c1-16
+fn get_addr(pid: i32, addr_name: &str) -> Option<u64> {
     //on crée la bonne string à partir du param
     let arg1 = format!("objdump -t /proc/{}/exe", pid);
     let arg2 = format!("grep {}", addr_name);
@@ -117,14 +111,32 @@ fn get_addr(pid: i32, addr_name: &str) -> Option<i64> {
 
     //on réduit le retour à l'addresse seule (on vire le "\n" récupéré derriere)
     let result = output.trim_end();
-    let result = i64::from_str_radix(result, 16);
+    let result = u64::from_str_radix(result, 16);
     result.ok()
 }
 
-fn inject_trap(pid: i32, address: i32) {
-    let trap = format!("{:0>16}", "0xCC");
+//cat /proc/xxx/maps | grep -m1 tpsel_trace | cut -c1-12
+fn get_offset(pid: i32) -> Option<u64> {
+    //on crée la bonne string à partir du param
+    let arg = format!("cat /proc/{}/maps", pid);
+
+    let commands = vec![
+        Exec::shell(arg),
+        Exec::shell("head -n 1"),
+        Exec::shell("cut -c1-12"),
+    ];
+    let pipeline = subprocess::Pipeline::from_exec_iter(commands);
+    let output = pipeline.capture().unwrap().stdout_str();
+    let result = output.trim_end();
+    let result = u64::from_str_radix(result, 16);
+    result.ok()
+}
+
+fn inject_trap(pid: i32, address: u64) {
+    let trap: u8 = 0xCC;
     let path = format!("/proc/{}/mem", pid);
-    let addr = format!("{:0>16x}", address);
+    let offset: u64 = get_offset(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
+    //let addr = format!("{:0>16x}", address);
     //let file_read = File::open(path).expect("Erreur à l'ouverture de la memoire du processus");
     // let content : &str = trap_file(file_read);
     // let file_write = std::fs::write(path, content).expect("Erreur à l'écriture dans la mémoire")
@@ -132,10 +144,12 @@ fn inject_trap(pid: i32, address: i32) {
         .read(true)
         .write(true)
         .open(path)
-        .expect("erreur lors de l'ouverture du fichier");
+        .expect("Erreur lors de l'ouverture du fichier");
     //let seek_param = seek_addr(&mut file, addr.as_str());
-    file.seek(SeekFrom::Start(address as u64));
-    file.write_all(trap.as_bytes());
+    file.seek(SeekFrom::Start(address as u64 + offset))
+        .expect("Erreur lors de la modification du curseur pour l'écriture");
+    file.write_all(&[trap])
+        .expect("Erreur lors de l'écriture de l'instruction trap dans la mémoire du tracé");
 }
 
 // fn seek_addr(file: &mut File, addr: &str) -> u64 {
