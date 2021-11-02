@@ -1,6 +1,4 @@
-#![allow(dead_code)]
-#![allow(non_snake_case)]
-#![allow(unused)]
+#![allow(unused_imports)]
 
 use subprocess::*; //pour les pipes
 
@@ -41,39 +39,25 @@ unsafe {
 */
 
 fn main() {
-    let local_pid: Pid = Pid::from_raw(process::id() as i32);
-    // println!("local pid : {}", local_pid);
-
     //get PID
     let pid_trace: i32 = pgrep("tpsel_trace")
         .expect("Erreur lors de la récupération de l'identifiant du programme tracé")
         as i32;
-    //test print PID
-    println!("pid trace : {}\n", pid_trace);
-
     //get the address of function name given in arg
     let address_name = "trois_n";
     let address: u64 = get_addr(pid_trace, address_name)
         .expect("Erreur lors de la récupéraion de l'addresse de la fonction du prog tracé");
 
-    //print the address of function_name in hexa and decimal
-    println!(
-        "address of function \"{}\" :\nhexa (filled) : \"{:0>16x}\"\ndecimal : \"{}\"\n",
-        address_name, address, address
-    );
+    ptrace::attach(Pid::from_raw(pid_trace)) //attaching to process
+        .expect("Erreur lors de l'attachement au processus cible");
 
-    // attaching to process
-    let attaching = ptrace::attach(Pid::from_raw(pid_trace));
-    println!("attaching result : {:?}\n", attaching);
+    inject_trap(pid_trace, address); //injecting trap
+    wait().expect("erreur au wait : ");
 
-    inject_trap(pid_trace, address);
-    wait();
+    //ptrace::detach(Pid::from_raw(pid_trace), Signal::SIGCONT) //detaching
+    //    .expect("Erreur lors du détachement du processus");
 
-    // detaching from process
-    let detaching = ptrace::cont(Pid::from_raw(pid_trace), Signal::SIGCONT);
-    println!("detaching result : {:?}\n", detaching);
-
-    println!("end");
+    println!("Tout s'est bien passé, arrêt du programme."); //end
 }
 
 //FONCTION UTILES
@@ -136,40 +120,16 @@ fn inject_trap(pid: i32, address: u64) {
     let trap: u8 = 0xCC;
     let path = format!("/proc/{}/mem", pid);
     let offset: u64 = get_offset(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
-    //let addr = format!("{:0>16x}", address);
-    //let file_read = File::open(path).expect("Erreur à l'ouverture de la memoire du processus");
-    // let content : &str = trap_file(file_read);
-    // let file_write = std::fs::write(path, content).expect("Erreur à l'écriture dans la mémoire")
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
         .expect("Erreur lors de l'ouverture du fichier");
-    //let seek_param = seek_addr(&mut file, addr.as_str());
     file.seek(SeekFrom::Start(address as u64 + offset))
         .expect("Erreur lors de la modification du curseur pour l'écriture");
     file.write_all(&[trap])
         .expect("Erreur lors de l'écriture de l'instruction trap dans la mémoire du tracé");
 }
-
-// fn seek_addr(file: &mut File, addr: &str) -> u64 {
-//     let mut buff: Vec<u8> = vec![];
-//     println!("file : {:?}", &file);
-//     let res_read = file.read(&mut buff);
-//     match res_read {
-//         Err(err) => println!("erreur lecture bytes fichier : {}", err),
-//         Ok(ok) => println!("lecture fichier bien passée : {}", ok),
-//     }
-//     let mut buff = buff.as_slice();
-//     println!("buff : {:?}", &buff);
-//     let addr = addr.as_bytes();
-//     let mut start_indice = 0u64;
-//     while !buff.starts_with(addr) {
-//         start_indice = start_indice + 1; //on incrémente l'indice de départ
-//         buff = &buff[1..]; //on garde tout sauf le first
-//     }
-//     start_indice
-// }
 //
 //
 //

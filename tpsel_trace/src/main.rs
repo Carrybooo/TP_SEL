@@ -22,8 +22,12 @@ fn main() {
     let pid: Pid = Pid::from_raw(id() as i32);
     let mut cpt = 0i32;
     loop {
-        let trois_n: u64 = trois_n(10000);
-        println!("max trois_n : {}, pid: {}, cpt : {}", trois_n, pid, cpt); //, trois_n.1);
+        if cpt % 5 == 0 {
+            let trois_n: u64 = trois_n(10000);
+            println!("max trois_n : {}, pid: {}, cpt : {}", trois_n, pid, cpt);
+        } else {
+            println!("and counting... cpt = {}", cpt);
+        }
         sleep(Duration::new(1, 0));
         cpt = cpt + 1;
     }
