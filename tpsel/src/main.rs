@@ -43,9 +43,9 @@ fn main() {
     let pid_trace: i32 = pgrep("tpsel_trace")
         .expect("Erreur lors de la récupération de l'identifiant du programme tracé")
         as i32;
-    //get the address of function name given in arg
+    //get the address (in the program) of the function (name given in arg)
     let address_name = "trois_n";
-    let address: u64 = get_addr(pid_trace, address_name)
+    let address: u64 = get_offset(pid_trace, address_name)
         .expect("Erreur lors de la récupéraion de l'addresse de la fonction du prog tracé");
 
     ptrace::attach(Pid::from_raw(pid_trace)) //attaching to process
@@ -54,8 +54,8 @@ fn main() {
     inject_trap(pid_trace, address); //injecting trap
     wait().expect("erreur au wait : ");
 
-    //ptrace::detach(Pid::from_raw(pid_trace), Signal::SIGCONT) //detaching
-    //    .expect("Erreur lors du détachement du processus");
+    ptrace::detach(Pid::from_raw(pid_trace), Signal::SIGCONT) //detaching
+        .expect("Erreur lors du détachement du processus");
 
     println!("Tout s'est bien passé, arrêt du programme."); //end
 }
@@ -76,7 +76,7 @@ fn pgrep(name: &str) -> Option<isize> {
 }
 
 //objdump -t /proc/xxx/exe | grep trois_n | cut -c1-16
-fn get_addr(pid: i32, addr_name: &str) -> Option<u64> {
+fn get_offset(pid: i32, addr_name: &str) -> Option<u64> {
     //on crée la bonne string à partir du param
     let arg1 = format!("objdump -t /proc/{}/exe", pid);
     let arg2 = format!("grep {}", addr_name);
@@ -100,7 +100,7 @@ fn get_addr(pid: i32, addr_name: &str) -> Option<u64> {
 }
 
 //cat /proc/xxx/maps | grep -m1 tpsel_trace | cut -c1-12
-fn get_offset(pid: i32) -> Option<u64> {
+fn get_address(pid: i32) -> Option<u64> {
     //on crée la bonne string à partir du param
     let arg = format!("cat /proc/{}/maps", pid);
 
@@ -119,7 +119,8 @@ fn get_offset(pid: i32) -> Option<u64> {
 fn inject_trap(pid: i32, address: u64) {
     let trap: u8 = 0xCC;
     let path = format!("/proc/{}/mem", pid);
-    let offset: u64 = get_offset(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
+    let offset: u64 =
+        get_address(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
