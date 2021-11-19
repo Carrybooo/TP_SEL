@@ -59,6 +59,9 @@ fn main() {
     let pid_trace: i32 = pgrep("tpsel_trace")
         .expect("Erreur lors de la récupération de l'identifiant du programme tracé")
         as i32;
+    //pour ptrace il faut un type spécial "Pid" :
+    let pid_ptrace: Pid = Pid::from_raw(pid_trace);
+
     //get the offset (in the program) of the function (name given in arg)
     let offset_fct_to_replace: u64 = get_offset(pid_trace, functions.0)
         .expect("Erreur lors de la récupéraion de l'addresse de la fonction du prog tracé");
@@ -80,28 +83,27 @@ fn main() {
     //
     //---------------- ATTACHING + MODIF --------------------
     //
-    ptrace::attach(Pid::from_raw(pid_trace)) //attaching to process
+    ptrace::attach(pid_ptrace) //attaching to process
         .expect("Erreur lors de l'attachement au processus cible");
 
     inject(pid_trace, offset_fct_to_replace, false); //injecting
 
     wait().expect("erreur au wait : "); //wait after 1st trap
 
-    let mut regs = ptrace::getregs(Pid::from_raw(pid_trace))
-        .expect("Erreur récupération des regs après 1er trap");
+    let mut regs =
+        ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
     println!("rax avant modif :{:x}\n", regs.rax);
 
     regs.rax = offset_fct_replacing + get_address(pid_trace).unwrap(); //modif rax avec address_2 pour l'appel
     println!("rax après modif : {:x}\n", regs.rax);
 
-    ptrace::setregs(Pid::from_raw(pid_trace), regs); //set regs with modification
+    ptrace::setregs(pid_ptrace, regs); //set regs with modification
 
-    ptrace::cont(Pid::from_raw(pid_trace), Signal::SIGCONT);
+    ptrace::cont(pid_ptrace, Signal::SIGCONT);
 
     wait().expect("erreur au wait2 : ");
 
-    let regs = ptrace::getregs(Pid::from_raw(pid_trace))
-        .expect("Erreur récupération des regs APRES modif regs");
+    let regs = ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs APRES modif regs");
     println!(
         "rax après l'execution de la fonction :{:x}\n\
         (devrait être égal à 441 si la fonction \"square\" avait été appelée...)\n",
@@ -112,7 +114,7 @@ fn main() {
     //
     //------------------ DETACHING -----------------------
     //
-    ptrace::detach(Pid::from_raw(pid_trace), Signal::SIGCONT) //detaching
+    ptrace::detach(pid_ptrace, Signal::SIGCONT) //detaching
         .expect("Erreur lors du détachement du processus");
 
     println!("Tout s'est bien passé, sortie du programme."); //end
