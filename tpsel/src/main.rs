@@ -10,8 +10,8 @@ use std::fs::{write, File, OpenOptions};
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use libc;
-use libc::malloc;
+// use libc;
+// use libc::malloc;
 use nix::sys::ptrace;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::process;
@@ -25,6 +25,8 @@ use std::os::unix::process::CommandExt;
 
 use std::thread::sleep;
 use std::time::Duration;
+
+use nix::libc::posix_memalign;
 
 /* NOTES:
 POUR ALLOUER UNE VARIABLE
@@ -73,10 +75,14 @@ fn main() {
         //print des addresses.
         "offset fonction 1 : {:x}\n\
         offset fonction 2 : {:x}\n\
-        addresse page mémoire : {:x}\n",
+        addresse page mémoire : {:x}\n\
+        addresse libc : {:x}\n\
+        offset posix_memalign : {:x}\n",
         offset_fct_to_replace,
         offset_fct_replacing,
         get_address(pid_trace).unwrap(),
+        get_libc_address(pid_trace).unwrap(),
+        get_offset_posix_memalign("posix_memalign").unwrap(),
     );
 
     //
@@ -86,15 +92,19 @@ fn main() {
     ptrace::attach(pid_ptrace) //attaching to process
         .expect("Erreur lors de l'attachement au processus cible");
 
+    wait().expect("erreur au wait : "); //wait after 1st trap
     inject(pid_trace, offset_fct_to_replace, false); //injecting
+    ptrace::cont(pid_ptrace, Signal::SIGCONT);
 
     wait().expect("erreur au wait : "); //wait after 1st trap
+    println!("arrivé 1st trap !");
 
     let mut regs =
         ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
-    println!("rax avant modif :{:x}\n", regs.rax);
+    println!("rax avant modif :{:x} rip : {:x}\n", regs.rax, regs.rip);
 
     regs.rax = offset_fct_replacing + get_address(pid_trace).unwrap(); //modif rax avec address_2 pour l'appel
+    regs.rdi = 12;
     println!("rax après modif : {:x}\n", regs.rax);
 
     ptrace::setregs(pid_ptrace, regs); //set regs with modification
@@ -105,9 +115,9 @@ fn main() {
 
     let regs = ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs APRES modif regs");
     println!(
-        "rax après l'execution de la fonction :{:x}\n\
-        (devrait être égal à 441 si la fonction \"square\" avait été appelée...)\n",
-        regs.rax
+        "rax après l'execution de la fonction :{}\n\
+        (devrait être égal à 441 si la fonction \"square\" avait été appelée...)\n rip = {:x}",
+        regs.rax, regs.rip,
     );
 
     //
@@ -153,6 +163,25 @@ fn get_address(pid: i32) -> Option<u64> {
     result.ok()
 }
 
+//cat /proc/xxx/maps | grep -m1 tpsel_trace | cut -c1-12
+fn get_libc_address(pid: i32) -> Option<u64> {
+    let cmd1 = format!("cat /proc/{}/maps", pid); //on crée la bonne commande à partir du param
+
+    //on met dans un vecteur toutes les commandes à utiliser à la suite (via des pipes)
+    let commands = vec![
+        Exec::shell(cmd1),
+        Exec::shell("grep libc"),
+        Exec::shell("head -n 1"),
+        Exec::shell("cut -c1-12"),
+    ];
+    let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
+    let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
+    println!("output : {}", output);
+    let result = output.trim_end(); //on vire le retour à la ligne situé à la fin de l'output
+    let result = u64::from_str_radix(result, 16);
+    result.ok()
+}
+
 //objdump -t /proc/xxx/exe | grep trois_n | cut -c1-16
 fn get_offset(pid: i32, addr_name: &str) -> Option<u64> {
     let cmd1 = format!("objdump -t /proc/{}/exe", pid); //on crée la bonne string à partir des params
@@ -172,13 +201,30 @@ fn get_offset(pid: i32, addr_name: &str) -> Option<u64> {
     result.ok()
 }
 
+//nm /usr/lib64/libc.so.6 | grep posix_memalign
+fn get_offset_posix_memalign(fun_name: &str) -> Option<u64> {
+    //on met dans un vecteur toutes les commandes
+    let cmd1 = format!("grep {}", fun_name);
+
+    let commands = vec![
+        Exec::shell("nm /usr/lib64/libc.so.6"),
+        Exec::shell(cmd1),
+        Exec::shell("head -n 1"),
+        Exec::shell("cut -c1-16"),
+    ];
+    let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
+    let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
+
+    let result = output.trim_end(); //on vire le retour à la ligne situé à la fin de l'output
+    let result = u64::from_str_radix(result, 16);
+    result.ok()
+}
+
 fn inject(pid: i32, offset: u64, force_chall_1: bool) {
     let trap: [u8; 4] = match force_chall_1 {
         true => [0xCC, 0xCC, 0xCC, 0xCC],
         false => [0xCC, 0xFF, 0xD0, 0xCC],
     };
-    let trap: [u8; 1] = [0xCC];
-    let trap: [u8; 4] = [0xCC, 0xFF, 0xD0, 0xCC]; //instructions trap-call-trap
     let path = format!("/proc/{}/mem", pid);
     let address: u64 =
         get_address(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
