@@ -51,15 +51,20 @@ fn main() {
     //2eme param : fonction qui remplacera
     let args: Vec<String> = env::args().collect();
     let functions: (&str, &str) = match args.len() {
-        2 => (&args[1].as_str(), "square"),
+        2 => (&args[1].as_str(), "add_sub"),
         3 => (&args[1].as_str(), &args[2].as_str()),
-        _ => ("trois_n", "square"),
+        _ => ("trois_n", "add_sub"),
     };
 
     //
     //
     //----------------PID + CALCUL ADDRESSES-------------------------------------------------------
     //
+
+    //this PID
+    let pid_local: i32 = process::id() as i32;
+    println!("PID local : {}", pid_local);
+
     //get PID
     let pid_trace: i32 = pgrep("tpsel_trace")
         .expect("Erreur lors de la récupération de l'identifiant du programme tracé")
@@ -99,15 +104,14 @@ fn main() {
         posix_memalign_offset,
     );
 
-    /*//POSIX_MEMALIGN QUI MARCHE
-        unsafe {
-            let mut out = ptr::null_mut();
-            let align = size_of::<usize>();
-            let ret = libc::posix_memalign(&mut out, align, align);
-            println!("out : {:?}", out);
-            println!("out : {:x}", out as i32);
-        }
-    */
+    //POSIX_MEMALIGN EXAMPLE
+    // unsafe {
+    //     let mut out = ptr::null_mut();
+    //     let align = size_of::<usize>();
+    //     let ret = libc::posix_memalign(&mut out, align, align);
+    //     println!("ret : {}", ret);
+    //     println!("out : {:?}\nout : {:x}\n", out, out as u64);
+    // }
 
     //
     //
@@ -122,26 +126,36 @@ fn main() {
     ptrace::cont(pid_ptrace, Signal::SIGCONT);
 
     wait().expect("erreur au wait : "); //wait after 1st trap
-    println!("arrivé 1st trap !");
 
     let mut regs =
         ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
-    println!("rax avant modif :{:x} rip : {:x}\n", regs.rax, regs.rip);
+    println!(
+        "Avant modif des regs:\nrax = {:x}\nrip = {:x}\nrsp = {:x}\n",
+        regs.rax, regs.rip, regs.rsp,
+    );
 
-    //code chall2
-    // regs.rax = offset_fct_replacing + get_address(pid_trace).unwrap();
+    // chall2 avec 3 args au lieu d'1 pour tester
+    // regs.rax = mem_address + offset_fct_replacing;
     // regs.rdi = 12;
+    // regs.rsi = 5;
+    // regs.rdx = 3;
 
     let ptr_to_ptr: *mut *mut c_void = ptr::null_mut();
-    //let mut out = ptr::null_mut();
+
     regs.rax = get_libc_address(pid_trace).unwrap() + get_libc_offset("posix_memalign").unwrap();
     regs.rsp = regs.rsp - (size_of::<*mut *mut c_void>() as u64);
     regs.rdi = ptr_to_ptr as u64;
-    // regs.rdi = 0 as u64;
     regs.rsi = size_of::<usize>() as u64;
-    regs.rdx = size_of::<usize>() as u64;
+    regs.rdx = 0; //size_of::<usize>() as u64;
 
-    println!("rax après modif : {:x}\n", regs.rax);
+    println!(
+        "Avant l'execution de la fonction\n\
+            rax = {:x}\n\
+            rdi = {:x}\n\
+            rip = {:x}\n\
+            rsp = {:x}\n",
+        regs.rax, regs.rdi, regs.rip, regs.rsp,
+    );
 
     ptrace::setregs(pid_ptrace, regs); //set regs with modification
 
@@ -153,15 +167,19 @@ fn main() {
 
     println!(
         "Après l'execution de la fonction\n\
-        rax = {:x}\n\
-        rip = {:x}\n\
-        rdi = {:x}\n",
-        regs.rax, regs.rip, regs.rdi,
+            rax = {}\n\
+            rdi = {:x}\n\
+            rip = {:x}\n\
+            rsp = {:x}\n",
+        regs.rax, regs.rdi, regs.rip, regs.rsp,
     );
 
-    //let rdi = read_rdi(pid_trace, regs.rdi);
+    // wait();
+    // wait();
 
-    //println!("lecture sur rdi : {}", rdi);
+    // let rdi = read_rdi(pid_trace, regs.rdi, mem_address);
+    //
+    // println!("lecture sur rdi : {}", rdi);
 
     //
     //------------------ DETACHING ----------------------------------------------------------------
@@ -206,7 +224,7 @@ fn get_address(pid: i32) -> Option<u64> {
     ];
     let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
     let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
-    println!("output : {}", output);
+
     let result = output.trim_end(); //on vire le retour à la ligne situé à la fin de l'output
     let result = u64::from_str_radix(result, 16);
     result.ok()
@@ -288,11 +306,11 @@ fn inject(pid: i32, offset: u64, force_chall_1: bool) {
         .expect("Erreur lors de l'écriture des instructions dans la mémoire du tracé");
 }
 
-fn read_rdi(pid: i32, rdi: u64) -> String {
+fn read_rdi(pid: i32, rdi: u64, address: u64) -> String {
     let mut string: String = String::from("");
     let path = format!("/proc/{}/mem", pid);
-    let address: u64 =
-        get_address(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
+    // let address: u64 =
+    //     get_address(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
     let mut file = OpenOptions::new()
         .read(true)
         .open(path)

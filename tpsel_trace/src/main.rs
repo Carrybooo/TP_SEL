@@ -21,8 +21,7 @@ use nix::unistd::Pid;
 
 fn main() {
     let pid: Pid = Pid::from_raw(id() as i32);
-    let mut var = 21u64;
-    let res = square(var);
+    let res = add_sub(4, 1, 3); //fct test registres rdi/rsi/rdx
     let mut cpt = 0i32;
     loop {
         // // let test = test();
@@ -77,10 +76,8 @@ pub fn trois_n(n: u64) -> u64 {
     return max;
 }
 
-pub fn square(mut n: u64) -> u64 {
-    // let n = 21u64;
-    //println!("FONCTION SQUARE ! param : {}\n", n);
-    n * n
+pub fn add_sub(p1: u64, p2: u64, p3: u64) -> u64 {
+    (p1 + p2) - p3
 }
 
 pub fn test() -> u64 {
