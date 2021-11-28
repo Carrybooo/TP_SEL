@@ -121,11 +121,11 @@ fn main() {
     ptrace::attach(pid_ptrace) //attaching to process
         .expect("Erreur lors de l'attachement au processus cible");
 
-    wait().expect("erreur au wait : "); //wait after 1st trap
+    wait().expect("erreur au wait : "); //wait for 1st trap
     inject(pid_trace, offset_fct_to_replace, false); //injecting
     ptrace::cont(pid_ptrace, Signal::SIGCONT);
 
-    wait().expect("erreur au wait : "); //wait after 1st trap
+    wait().expect("erreur au wait : ");
 
     let mut regs =
         ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
