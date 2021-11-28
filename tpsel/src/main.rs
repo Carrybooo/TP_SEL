@@ -58,12 +58,13 @@ fn main() {
 
     //
     //
-    //----------------PID + CALCUL ADDRESSES---------------------
+    //----------------PID + CALCUL ADDRESSES-------------------------------------------------------
     //
     //get PID
     let pid_trace: i32 = pgrep("tpsel_trace")
         .expect("Erreur lors de la récupération de l'identifiant du programme tracé")
         as i32;
+
     //pour ptrace il faut un type spécial "Pid" :
     let pid_ptrace: Pid = Pid::from_raw(pid_trace);
 
@@ -98,88 +99,86 @@ fn main() {
         posix_memalign_offset,
     );
 
-    // let ptr_to_ptr: *mut *mut c_void = ptr::null_mut();
-    //
-    // unsafe {
-    //     let res_memalign = posix_memalign(ptr_to_ptr, size_of::<*mut *mut c_void>(), 0) as i32;
-    //
-    //     println!("res_memalign : {}", res_memalign);
-    // }
-
-    let mut memptr: *mut *mut c_void = ptr::null_mut() as *mut *mut c_void;
-    unsafe {
-        let ret = libc::posix_memalign(
-            (&mut memptr).cast(),
-            align_of::<*mut c_void>(),
-            size_of::<*mut c_void>(),
-        );
-        println!("ret : {}", ret);
-        assert_eq!(ret, 0, "Failed to allocate or invalid alignment");
-    };
+    /*//POSIX_MEMALIGN QUI MARCHE
+        unsafe {
+            let mut out = ptr::null_mut();
+            let align = size_of::<usize>();
+            let ret = libc::posix_memalign(&mut out, align, align);
+            println!("out : {:?}", out);
+            println!("out : {:x}", out as i32);
+        }
+    */
 
     //
     //
     //---------------- ATTACHING + MODIF --------------------
     //
 
-    // ptrace::attach(pid_ptrace) //attaching to process
-    //     .expect("Erreur lors de l'attachement au processus cible");
+    ptrace::attach(pid_ptrace) //attaching to process
+        .expect("Erreur lors de l'attachement au processus cible");
+
+    wait().expect("erreur au wait : "); //wait after 1st trap
+    inject(pid_trace, offset_fct_to_replace, false); //injecting
+    ptrace::cont(pid_ptrace, Signal::SIGCONT);
+
+    wait().expect("erreur au wait : "); //wait after 1st trap
+    println!("arrivé 1st trap !");
+
+    let mut regs =
+        ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
+    println!("rax avant modif :{:x} rip : {:x}\n", regs.rax, regs.rip);
+
+    //code chall2
+    // regs.rax = offset_fct_replacing + get_address(pid_trace).unwrap();
+    // regs.rdi = 12;
+
+    let ptr_to_ptr: *mut *mut c_void = ptr::null_mut();
+    //let mut out = ptr::null_mut();
+    regs.rax = get_libc_address(pid_trace).unwrap() + get_libc_offset("posix_memalign").unwrap();
+    regs.rsp = regs.rsp - (size_of::<*mut *mut c_void>() as u64);
+    regs.rdi = ptr_to_ptr as u64;
+    // regs.rdi = 0 as u64;
+    regs.rsi = size_of::<usize>() as u64;
+    regs.rdx = size_of::<usize>() as u64;
+
+    println!("rax après modif : {:x}\n", regs.rax);
+
+    ptrace::setregs(pid_ptrace, regs); //set regs with modification
+
+    ptrace::cont(pid_ptrace, Signal::SIGCONT);
+
+    wait().expect("erreur au wait2 : ");
+
+    let regs = ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs APRES modif regs");
+
+    println!(
+        "Après l'execution de la fonction\n\
+        rax = {:x}\n\
+        rip = {:x}\n\
+        rdi = {:x}\n",
+        regs.rax, regs.rip, regs.rdi,
+    );
+
+    //let rdi = read_rdi(pid_trace, regs.rdi);
+
+    //println!("lecture sur rdi : {}", rdi);
+
     //
-    // wait().expect("erreur au wait : "); //wait after 1st trap
-    // inject(pid_trace, offset_fct_to_replace, false); //injecting
-    // ptrace::cont(pid_ptrace, Signal::SIGCONT);
+    //------------------ DETACHING ----------------------------------------------------------------
     //
-    // wait().expect("erreur au wait : "); //wait after 1st trap
-    // println!("arrivé 1st trap !");
-    //
-    // let mut regs =
-    //     ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
-    // println!("rax avant modif :{:x} rip : {:x}\n", regs.rax, regs.rip);
-    //
-    // //code chall2
-    // // regs.rax = offset_fct_replacing + get_address(pid_trace).unwrap();
-    // // regs.rdi = 12;
-    //
-    // let ptr_to_ptr: *mut *mut c_void = ptr::null_mut();
-    // regs.rax = get_libc_address(pid_trace).unwrap() + get_libc_offset("posix_memalign").unwrap();
-    // regs.rsp = regs.rsp - (size_of::<*mut c_void>() as u64);
-    // regs.rdi = ptr_to_ptr as u64;
-    // regs.rsi = 4096 as u64;
-    // regs.rdx = 0 as u64;
-    //
-    // println!("rax après modif : {:x}\n", regs.rax);
-    //
-    // ptrace::setregs(pid_ptrace, regs); //set regs with modification
-    //
-    // ptrace::cont(pid_ptrace, Signal::SIGCONT);
-    //
-    // wait().expect("erreur au wait2 : ");
-    //
-    // let regs = ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs APRES modif regs");
-    //
-    // println!(
-    //     "Après l'execution de la fonction\n\
-    //     rax = {:x}\n\
-    //     rip = {:x}\n\
-    //     rdi = {:x}\n",
-    //     regs.rax, regs.rip, regs.rdi,
-    // );
-    //
-    // //let rdi = read_rdi(pid_trace, regs.rdi);
-    //
-    // //println!("lecture sur rdi : {}", rdi);
-    // wait();
-    //
-    // //
-    // //
-    // //------------------ DETACHING -----------------------
-    // //
-    // ptrace::detach(pid_ptrace, Signal::SIGCONT) //detaching
-    //     .expect("Erreur lors du détachement du processus");
+    ptrace::detach(pid_ptrace, Signal::SIGCONT) //detaching
+        .expect("Erreur lors du détachement du processus");
 
     println!("Tout s'est bien passé, sortie du programme."); //end
 }
 
+//
+//
+//
+//-------------------------------------------------------------------------------------------------
+//-------------------------------------FUNCTIONS---------------------------------------------------
+//-------------------------------------------------------------------------------------------------
+//
 //FONCTIONS
 fn pgrep(name: &str) -> Option<isize> {
     let output = Command::new("pgrep").arg(name).output().unwrap();
@@ -207,7 +206,7 @@ fn get_address(pid: i32) -> Option<u64> {
     ];
     let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
     let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
-
+    println!("output : {}", output);
     let result = output.trim_end(); //on vire le retour à la ligne situé à la fin de l'output
     let result = u64::from_str_radix(result, 16);
     result.ok()
