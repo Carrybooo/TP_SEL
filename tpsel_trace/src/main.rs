@@ -80,8 +80,7 @@ pub fn trois_n(n: u64) -> u64 {
 pub fn square(mut n: u64) -> u64 {
     // let n = 21u64;
     //println!("FONCTION SQUARE ! param : {}\n", n);
-    n = 5;
-    n
+    n * n
 }
 
 pub fn test() -> u64 {
