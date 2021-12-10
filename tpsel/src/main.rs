@@ -195,9 +195,6 @@ fn main() {
     ptrace::setregs(pid_trace_struct, regs);
     println!("Avant le code cache : {}", print_regs(regs));
 
-    // wait();
-    println!("--------------------------------------------------AAAAA---------------\n");
-
     ptrace::cont(pid_trace_struct, Signal::SIGCONT);
     wait().expect("erreur wait après exécution du code cache : ");
 
@@ -230,6 +227,7 @@ fn main() {
 //-------------------------------------------------------------------------------------------------
 //
 //CONSTS
+//Cache code, this one is just a fct that returns 1234567890u64. (as simple as possible at first.)
 const CACHE_CODE: [u8; 16] = [
     0xb8, 0xd2, 0x02, 0x96, 0x49, 0xc3, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
