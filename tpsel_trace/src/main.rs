@@ -1,41 +1,12 @@
-#![allow(unused_imports)]
-#![allow(unused)]
-//#[no_mangle]
-// use nix;
-// use std;
-// use std::io::{Read, Seek, Write};
-//
-// use libc;
-// use libc::malloc;
-// use nix::sys::ptrace;
-// use std::alloc::{GlobalAlloc, Layout, System};
-use std::process::id;
-use std::thread::sleep;
-use std::time::Duration;
-
-// use nix::sys::signal::Signal;
-// use nix::sys::wait::{wait, WaitStatus};
-// use nix::unistd::{fork, ForkResult, Pid};
-// use std::os::unix::process::CommandExt;
+#![allow(unused_variables)]
 use nix::unistd::Pid;
+use std::process::id;
 
 fn main() {
     let pid: Pid = Pid::from_raw(id() as i32);
     let res = add_sub(4, 1, 3); //fct test registres rdi/rsi/rdx
     let mut cpt = 0i32;
     loop {
-        // // let test = test();
-        // if cpt % 5 == 0 {
-        //     // let test = test();
-        //     let trois_n: u64 = trois_n(1000000);
-        //     println!("max trois_n : {}, pid: {}, cpt : {}", trois_n, pid, cpt);
-        // } else {
-        //     println!("and counting... cpt = {}", cpt);
-        // }
-        // //sleep(Duration::new(1, 0));
-        // //cause une erreur car le getregs est appelé pendant le sleep....
-        // //je sais pas pourquoi.
-
         let trois_n: u64 = trois_n(1000000);
         println!("max trois_n : {}, pid: {}, cpt : {}", trois_n, pid, cpt);
         cpt = cpt + 1;
@@ -46,6 +17,9 @@ fn main() {
 //
 //
 
+/** function to remplace
+*   it's a basic Collatz maximum function for a given range.
+*/
 pub fn trois_n(n: u64) -> u64 {
     let mut max: u64 = 0;
     //let mut max_index: u64 = 0;
@@ -76,11 +50,9 @@ pub fn trois_n(n: u64) -> u64 {
     return max;
 }
 
+/**
+* function used to test good registers order.
+*/
 pub fn add_sub(p1: u64, p2: u64, p3: u64) -> u64 {
     (p1 + p2) - p3
-}
-
-pub fn test() -> u64 {
-    println!("x = {}", 1);
-    return 1;
 }

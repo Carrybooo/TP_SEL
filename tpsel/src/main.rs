@@ -26,24 +26,10 @@ use std::os::unix::process::CommandExt;
 use std::thread::sleep;
 use std::time::Duration;
 
-use nix::libc::{c_int, c_void, mprotect, posix_memalign};
+use nix::libc::{c_int, c_void, malloc, mprotect};
 use std::mem::{align_of, size_of};
 
 use std::ptr;
-
-/* NOTES:
-POUR ALLOUER UNE VARIABLE
-faire remonter le pointeur de pile pour créer une place pour une variable
-faire (- sizeof(taille de la valeur qu'on souhaite)) sur le ptr
-
-BLOC A GARDER POUR pouvoir UTILISER LE MALLOC plus tard
-unsafe {
-    let res_malloc = malloc(1024);
-    println!("resultat : {:?}", res_malloc);
-    //loop {} //test
-}
-
-*/
 
 fn main() {
     //bloc pour gérer d'éventuels paramètres à l'appel du programme
@@ -58,7 +44,8 @@ fn main() {
 
     //
     //
-    //----------------PID + CALCUL ADDRESSES-------------------------------------------------------
+    //----------------PID + DECLARATIONS ADDRESSES-------------------------------------------------
+    ///////////////////////////////////////////////////////////////////////////////////////////////
     //
 
     //this PID
@@ -70,15 +57,17 @@ fn main() {
         .expect("Erreur lors de la récupération de l'identifiant du programme tracé")
         as i32;
 
-    //pour ptrace il faut un type spécial "Pid" :
-    let pid_ptrace: Pid = Pid::from_raw(pid_trace);
+    //pour ptrace et d'autres instructions il faut une struct spéciale "Pid" :
+    let pid_trace_struct: Pid = Pid::from_raw(pid_trace);
 
     //address of the start of the code
     let mem_address = get_address(pid_trace)
         .expect("Erreur lors de la récupération de l'adresse de début du code");
+
     //get the offset (in the program) of the function (name given in arg)
     let offset_fct_to_replace: u64 = get_offset(pid_trace, functions.0)
         .expect("Erreur lors de la récupéraion de l'addresse de la fonction du prog tracé");
+
     //offset of the 2nd function
     let offset_fct_replacing: u64 = get_offset(pid_trace, functions.1)
         .expect("Erreur lors de la récupération de l'addresse de la 2e fonction du prog tracé");
@@ -86,105 +75,141 @@ fn main() {
     //address of libc in mem
     let libc_address = get_libc_address(pid_trace)
         .expect("Erreur lors de la récupération de l'addresse de la libc");
-    let posix_memalign_offset = get_libc_offset("posix_memalign")
-        .expect("Erreur lors de la récupération de l'offset de posix_memalign");
+    let malloc_offset = get_libc_offset("__libc_malloc")
+        .expect("Erreur lors de la récupération de l'offset de malloc");
+    let getpagesize_offset = get_libc_offset("__getpagesize")
+        .expect("Erreur lors de la récupération de l'offset de getpagesize");
+    let memalign_offset = get_libc_offset("__libc_memalign")
+        .expect("Erreur lors de la récupération de l'address de memalign");
+    let mprotect_offset = get_libc_offset("__mprotect")
+        .expect("Erreur lors de la récupération de l'offset de mprotect");
 
     //print de toutes les variables calculées avant
     println!(
-        //print des addresses.
         "offset fonction 1 : {:x}\n\
         offset fonction 2 : {:x}\n\
-        addresse page mémoire : {:x}\n\
+        addresse mémoire proc : {:x}\n\
         addresse libc : {:x}\n\
-        offset posix_memalign : {:x}\n",
-        offset_fct_to_replace,
-        offset_fct_replacing,
-        mem_address,
-        libc_address,
-        posix_memalign_offset,
+        offset malloc : {:x}\n",
+        offset_fct_to_replace, offset_fct_replacing, mem_address, libc_address, malloc_offset,
     );
 
-    //POSIX_MEMALIGN EXAMPLE
-    // unsafe {
-    //     let mut out = ptr::null_mut();
-    //     let align = size_of::<usize>();
-    //     let ret = libc::posix_memalign(&mut out, align, align);
-    //     println!("ret : {}", ret);
-    //     println!("out : {:?}\nout : {:x}\n", out, out as u64);
-    // }
-
     //
     //
-    //---------------- ATTACHING + MODIF --------------------
+    //---------------- ATTACHING + TRAP -----------------------------------------------------------
+    ///////////////////////////////////////////////////////////////////////////////////////////////
     //
 
-    ptrace::attach(pid_ptrace) //attaching to process
+    ptrace::attach(pid_trace_struct) //attaching to process
         .expect("Erreur lors de l'attachement au processus cible");
+    wait().expect("erreur wait après attachement : "); //wait after attaching
 
-    wait().expect("erreur au wait : "); //wait for 1st trap
-    inject(pid_trace, offset_fct_to_replace, false); //injecting
-    ptrace::cont(pid_ptrace, Signal::SIGCONT);
+    inject_trap(pid_trace, mem_address, offset_fct_to_replace, false); //injecting
 
-    wait().expect("erreur au wait : ");
+    ptrace::cont(pid_trace_struct, Signal::SIGCONT);
+    wait().expect("erreur wait pour premier trap : "); //wait for 1st trap
+
+    let mut regs = ptrace::getregs(pid_trace_struct)
+        .expect("Erreur récupération des regs après avant exec memalign");
+    println!("Premier getregs avant toute modif : {}", print_regs(regs));
+
+    println!("----------------------------------------------------------------------\n");
+    //
+    //
+    //                           1 1 1 1 1 1 1 1 1 1 1 1
+    //
+    ////////////////////////////PREMIER APPEL : MEMALIGN///////////////////////////////////////////
+    regs.rax = libc_address + memalign_offset; // __libc_memalign address
+    regs.rdi = 4096; //page size for align
+    regs.rsi = 16; //size of mem to allocate
+
+    println!("Avant l'execution de memalign : {}", print_regs(regs));
+
+    ptrace::setregs(pid_trace_struct, regs); //set regs with modification
+
+    ptrace::cont(pid_trace_struct, Signal::SIGCONT);
+    wait().expect("erreur wait après exécution memalign: ");
+
+    let mut regs = ptrace::getregs(pid_trace_struct)
+        .expect("Erreur récupération des regs APRES exec memalign");
+
+    println!("Après l'execution de memalign : {}", print_regs(regs));
+
+    let addr_allocated = regs.rax; //addr of the allocated memory
+    println!("address allocated : {:x}", addr_allocated);
+
+    println!("----------------------------------------------------------------------\n");
+    //
+    //
+    //                          2 2 2 2 2 2 2 2 2 2 2 2 2
+    //
+    ////////////////////////////DEUXIEME APPEL : MPROTECT//////////////////////////////////////////
+    regs.rip = regs.rip - 3; //decrement the instruction pointer to get back just after 1st trap
+
+    regs.rax = libc_address + mprotect_offset; //addr of __mprotect
+    regs.rdi = addr_allocated; //addr of allocated mem
+    regs.rsi = 16; //size of the memory allocated
+    regs.rdx = 7; //type of modif, 1=read, 2=write, 4=exec. (so 6=w+x, 7=r+w+x)
+
+    println!("Avant execution memprotect : {}", print_regs(regs));
+
+    ptrace::setregs(pid_trace_struct, regs); //set regs with modification
+
+    ptrace::cont(pid_trace_struct, Signal::SIGCONT);
+    wait().expect("erreur wait après exécution mprotect : ");
 
     let mut regs =
-        ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs après 1er trap");
-    println!(
-        "Avant modif des regs:\nrax = {:x}\nrip = {:x}\nrsp = {:x}\n",
-        regs.rax, regs.rip, regs.rsp,
-    );
+        ptrace::getregs(pid_trace_struct).expect("Erreur récupération des regs APRES modif regs");
 
-    // chall2 avec 3 args au lieu d'1 pour tester
-    // regs.rax = mem_address + offset_fct_replacing;
-    // regs.rdi = 12;
-    // regs.rsi = 5;
-    // regs.rdx = 3;
+    println!("Après execution memprotect : {}", print_regs(regs));
 
-    let ptr_to_ptr: *mut *mut c_void = ptr::null_mut();
-
-    regs.rax = get_libc_address(pid_trace).unwrap() + get_libc_offset("posix_memalign").unwrap();
-    regs.rsp = regs.rsp - (size_of::<*mut *mut c_void>() as u64);
-    regs.rdi = ptr_to_ptr as u64;
-    regs.rsi = size_of::<usize>() as u64;
-    regs.rdx = 0; //size_of::<usize>() as u64;
-
-    println!(
-        "Avant l'execution de la fonction\n\
-            rax = {:x}\n\
-            rdi = {:x}\n\
-            rip = {:x}\n\
-            rsp = {:x}\n",
-        regs.rax, regs.rdi, regs.rip, regs.rsp,
-    );
-
-    ptrace::setregs(pid_ptrace, regs); //set regs with modification
-
-    ptrace::cont(pid_ptrace, Signal::SIGCONT);
-
-    wait().expect("erreur au wait2 : ");
-
-    let regs = ptrace::getregs(pid_ptrace).expect("Erreur récupération des regs APRES modif regs");
-
-    println!(
-        "Après l'execution de la fonction\n\
-            rax = {}\n\
-            rdi = {:x}\n\
-            rip = {:x}\n\
-            rsp = {:x}\n",
-        regs.rax, regs.rdi, regs.rip, regs.rsp,
-    );
-
-    // wait();
-    // wait();
-
-    // let rdi = read_rdi(pid_trace, regs.rdi, mem_address);
+    println!("----------------------------------------------------------------------\n");
     //
-    // println!("lecture sur rdi : {}", rdi);
+    //
+    //                       3 3 3 3 3 3 3 3 3 3 3 3 3 3
+    //
+    ////////////////////////TROISIEME APPEL : CODE CACHE///////////////////////////////////////////
+    inject_cache(pid_trace, addr_allocated); //inject cache code into allocated memory
+
+    //création du jump à injecter
+    let addr_bytes = addr_allocated.to_ne_bytes(); //convert address to bytes
+    print_bytes(addr_bytes); //print bytes to be sure, then make the jump (with a trap at the end
+                             //to allow a getregs to verify the function call)
+    let jump: [u8; 12] = [
+        0x48,
+        0xB8,
+        addr_bytes[0],
+        addr_bytes[1],
+        addr_bytes[2],
+        addr_bytes[3],
+        addr_bytes[4],
+        addr_bytes[5],
+        addr_bytes[6],
+        addr_bytes[7],
+        0xff,
+        0xe0,
+    ];
+
+    inject_jump(pid_trace, mem_address + offset_fct_to_replace, jump);
+    regs.rip = regs.rip - 4; //decrement the instruction pointer to get back at origin fct call
+    ptrace::setregs(pid_trace_struct, regs);
+    println!("Avant le code cache : {}", print_regs(regs));
+
+    // wait();
+    println!("--------------------------------------------------AAAAA---------------\n");
+
+    ptrace::cont(pid_trace_struct, Signal::SIGCONT);
+    wait().expect("erreur wait après exécution du code cache : ");
+
+    let regs = ptrace::getregs(pid_trace_struct)
+        .expect("Erreur récupération des regs après l'exécution du code cache");
+
+    println!("Après le code cache : {}", print_regs(regs));
 
     //
     //------------------ DETACHING ----------------------------------------------------------------
     //
-    ptrace::detach(pid_ptrace, Signal::SIGCONT) //detaching
+    ptrace::detach(pid_trace_struct, Signal::SIGCONT) //detaching
         .expect("Erreur lors du détachement du processus");
 
     println!("Tout s'est bien passé, sortie du programme."); //end
@@ -193,11 +218,51 @@ fn main() {
 //
 //
 //
+//
+//
+//
+//
+//
+//
+//
 //-------------------------------------------------------------------------------------------------
-//-------------------------------------FUNCTIONS---------------------------------------------------
+//-------------------------------------FUNCTIONS & CONSTS------------------------------------------
 //-------------------------------------------------------------------------------------------------
 //
+//CONSTS
+const CACHE_CODE: [u8; 16] = [
+    0xb8, 0xd2, 0x02, 0x96, 0x49, 0xc3, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
 //FONCTIONS
+fn print_bytes(addr_bytes: [u8; 8]) {
+    println!(
+        "address bytes : {:X} {:X} {:X} {:X} {:X} {:X} {:X} {:X} (IN BIG ENDIAN)\n",
+        addr_bytes[0],
+        addr_bytes[1],
+        addr_bytes[2],
+        addr_bytes[3],
+        addr_bytes[4],
+        addr_bytes[5],
+        addr_bytes[6],
+        addr_bytes[7],
+    );
+}
+/** Fonction pour print les regs, appelée dans un unique println, pour avoir un code moins lourd
+*/
+fn print_regs(regs: libc::user_regs_struct) -> String {
+    let res = format!(
+        "\n\
+            rax = {:x}\n\
+            rdi = {:x}\n\
+            rsi = {:x}\n\
+            rdx = {:x}\n\
+            rip = {:x}\n",
+        regs.rax, regs.rdi, regs.rsi, regs.rdx, regs.rip,
+    );
+    res
+}
+
 fn pgrep(name: &str) -> Option<isize> {
     let output = Command::new("pgrep").arg(name).output().unwrap();
     if output.status.success() {
@@ -205,7 +270,10 @@ fn pgrep(name: &str) -> Option<isize> {
             .unwrap()
             .trim()
             .parse()
-            .expect("Erreur à la récupération du PID");
+            .expect(
+                "Erreur à la récupération du PID, il y a \
+                probablement plus d'1 processus ayant ce nom",
+            );
         Some(pid)
     } else {
         None
@@ -221,6 +289,25 @@ fn get_address(pid: i32) -> Option<u64> {
         Exec::shell(cmd1),
         Exec::shell("head -n 1"),
         Exec::shell("cut -c1-12"),
+    ];
+    let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
+    let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
+
+    let result = output.trim_end(); //on vire le retour à la ligne situé à la fin de l'output
+    let result = u64::from_str_radix(result, 16);
+    result.ok()
+}
+
+//objdump -t /proc/xxx/exe | grep trois_n | cut -c1-16
+fn get_offset(pid: i32, addr_name: &str) -> Option<u64> {
+    let cmd1 = format!("objdump -t /proc/{}/exe", pid); //on crée la string depuis les params
+    let cmd2 = format!("grep {}", addr_name);
+
+    //on met dans un vecteur toutes les commandes
+    let commands = vec![
+        Exec::shell(cmd1),
+        Exec::shell(cmd2),
+        Exec::shell("cut -c1-16"),
     ];
     let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
     let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
@@ -249,25 +336,6 @@ fn get_libc_address(pid: i32) -> Option<u64> {
     result.ok()
 }
 
-//objdump -t /proc/xxx/exe | grep trois_n | cut -c1-16
-fn get_offset(pid: i32, addr_name: &str) -> Option<u64> {
-    let cmd1 = format!("objdump -t /proc/{}/exe", pid); //on crée la bonne string à partir des params
-    let cmd2 = format!("grep {}", addr_name);
-
-    //on met dans un vecteur toutes les commandes
-    let commands = vec![
-        Exec::shell(cmd1),
-        Exec::shell(cmd2),
-        Exec::shell("cut -c1-16"),
-    ];
-    let pipeline = subprocess::Pipeline::from_exec_iter(commands); //on execute les commandes
-    let output = pipeline.capture().unwrap().stdout_str(); //on récupère le résultat
-
-    let result = output.trim_end(); //on vire le retour à la ligne situé à la fin de l'output
-    let result = u64::from_str_radix(result, 16);
-    result.ok()
-}
-
 //nm /usr/lib64/libc.so.6 | grep "fn_name"
 fn get_libc_offset(fn_name: &str) -> Option<u64> {
     //on met dans un vecteur toutes les commandes
@@ -287,14 +355,14 @@ fn get_libc_offset(fn_name: &str) -> Option<u64> {
     result.ok()
 }
 
-fn inject(pid: i32, offset: u64, force_chall_1: bool) {
+fn inject_trap(pid: i32, address: u64, offset: u64, force_chall_1: bool) {
     let trap: [u8; 4] = match force_chall_1 {
         true => [0xCC, 0xCC, 0xCC, 0xCC],
         false => [0xCC, 0xFF, 0xD0, 0xCC],
     };
     let path = format!("/proc/{}/mem", pid);
     let address: u64 = get_address(pid)
-        .expect("Erreur lors de la recupération de l'adresse mémoire dans inject()");
+        .expect("Erreur lors de la recupération de l'adresse mémoire dans inject_trap()");
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -306,20 +374,30 @@ fn inject(pid: i32, offset: u64, force_chall_1: bool) {
         .expect("Erreur lors de l'écriture des instructions dans la mémoire du tracé");
 }
 
-fn read_rdi(pid: i32, rdi: u64, address: u64) -> String {
-    let mut string: String = String::from("");
-    let path = format!("/proc/{}/mem", pid);
-    // let address: u64 =
-    //     get_address(pid).expect("Erreur lors de la recupération de l'adresse mémoire");
+fn inject_cache(pid: i32, address: u64) {
+    let mut path = format!("/proc/{}/mem", pid);
     let mut file = OpenOptions::new()
         .read(true)
+        .write(true)
         .open(path)
         .expect("Erreur lors de l'ouverture du fichier");
-    file.seek(SeekFrom::Start(rdi))
-        .expect("Erreur lors de la modification du curseur pour la lecture");
-    file.read_to_string(&mut string)
-        .expect("Erreur lors de la lecture à l'offset rdi");
-    return string;
+    file.seek(SeekFrom::Start(address))
+        .expect("Erreur lors de la modification du curseur pour l'écriture du code cache");
+    file.write(&CACHE_CODE)
+        .expect("Erreur lors de l'écriture du code cache dans la mémoire du tracé");
+}
+
+fn inject_jump(pid: i32, address: u64, content: [u8; 12]) {
+    let mut path = format!("/proc/{}/mem", pid);
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("Erreur lors de l'ouverture du fichier");
+    file.seek(SeekFrom::Start(address))
+        .expect("Erreur lors de la modification du curseur pour l'écriture du code cache");
+    file.write(&content)
+        .expect("Erreur lors de l'écriture du code cache dans la mémoire du tracé");
 }
 //
 //
