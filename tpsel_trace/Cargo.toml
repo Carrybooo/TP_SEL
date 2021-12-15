@@ -2,7 +2,7 @@
 name = "tpsel_trace"
 version = "0.1.0"
 authors = ["Carrybooo <46242209+Carrybooo@users.noreply.github.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 nix = "0.23.0"
